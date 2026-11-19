@@ -25,8 +25,9 @@ class MultiHeadAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, d_model=64, mlp_ratio=4, bias=True, dropout=0.1):
         super().__init__()
-        self.up_proj = nn.Linear(d_model, mlp_ratio * d_model, bias)
-        self.down_proj = nn.Linear(mlp_ratio * d_model, d_model, bias)
+        d_ffn = int(mlp_ratio * d_model)
+        self.up_proj = nn.Linear(d_model, d_ffn, bias)
+        self.down_proj = nn.Linear(d_ffn, d_model, bias)
         self.act_fn = nn.GELU()
         self.dropout = nn.Dropout(p=dropout)
 
