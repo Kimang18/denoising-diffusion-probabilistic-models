@@ -7,10 +7,10 @@ import torch.nn.functional as F
 import torchvision
 from lightning.pytorch.callbacks import TQDMProgressBar
 from safetensors.torch import save_model
-from src.module.ddpm import DiffusionModel
-from src.module.sampler import Sampler
 
 from src.data import DataModule
+from src.modules.ddpm import DiffusionModel
+from src.modules.sampler import Sampler
 
 
 class Model(L.LightningModule):
