@@ -8,7 +8,7 @@ class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, time_embed_dim=128, scaled_time_embed_dim=256):
         super().__init__()
         half_dim = time_embed_dim // 2
-        inv_freqs = 1.0 / 10000 ** (torch.arange(0, time_embed_dim, 2) / half_dim)
+        inv_freqs = 1.0 / 10000 ** (torch.arange(half_dim) / (half_dim - 1))
         self.register_buffer("inv_freqs", inv_freqs[None, :], persistent=False)
         self.time_scaled = nn.Sequential(
             nn.Linear(time_embed_dim, scaled_time_embed_dim),
