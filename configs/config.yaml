@@ -1,0 +1,21 @@
+seed: 3407
+data:
+  img_size: 64
+  batch_size: 64
+net:
+  in_channels: 3
+  start_dim: 64
+  dim_mults: [1, 2, 4]
+  residual_blocks_per_group: 1
+  groupnorm_n_groups: 8
+  time_embed_dim: 128
+  time_embed_dim_ratio: 2
+sampler:
+  total_steps: 1000
+model:
+  learning_rate: 7e-4
+trainer:
+  val_check_interval: 2500
+  max_steps: 25000
+  max_epochs: -1
+  gradient_clip_val: 1.0
