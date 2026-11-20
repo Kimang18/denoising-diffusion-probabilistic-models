@@ -66,6 +66,8 @@ class Model(L.LightningModule):
             [torch.stack(all_steps) for all_steps in imgs_over_timesteps]
         )
         imgs_over_timesteps = imgs_over_timesteps.reshape(-1, *batch.shape[1:])
+        # renormalize to [0, 1]
+        imgs_over_timesteps = (imgs_over_timesteps + 1) / 2
         self.logger.experiment.add_image(
             "val/gen_imgs",
             torchvision.utils.make_grid(imgs_over_timesteps, nrow=10),
