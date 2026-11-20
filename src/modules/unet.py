@@ -1,8 +1,7 @@
+import einops
 import torch
 import torch.nn.functional as F
 from torch import nn
-
-from .encoder_transformer import Transformer
 
 
 class UpSampleBlock(nn.Module):
@@ -17,9 +16,26 @@ class UpSampleBlock(nn.Module):
         return self.upsample(x)
 
 
+class Transformer(nn.TransformerEncoderLayer):
+    def forward(self, x):
+        batch_size, channels, height, width = x.shape
+        x = einops.rearrange(x, "b c h w -> b (h w) c")
+        x = super().forward(x)
+        x = einops.rearrange(x, "b (h w) c -> b c h w", h=height, w=width)
+        return x
+
+
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, groupnorm_n_groups, time_embed_dim):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        groupnorm_n_groups,
+        time_embed_dim,
+        name="residual",
+    ):
         super().__init__()
+        self.name = name
         self.time_expand = nn.Linear(time_embed_dim, out_channels)
 
         self.groupnorm1 = nn.GroupNorm(groupnorm_n_groups, in_channels)
@@ -81,7 +97,7 @@ class UNET(nn.Module):
             self.encoder_config.append((ch, "attention"))
 
             if i < len(channel_sizes) - 1:
-                self.encoder_config.append(((ch, channel_sizes[i + 1]), "residual"))
+                self.encoder_config.append(((ch, channel_sizes[i + 1]), "upchannel"))
 
         self.bottleneck_config = []
         for _ in range(residual_blocks_per_group):
@@ -95,14 +111,17 @@ class UNET(nn.Module):
             if name == "attention":
                 d_model = meta
                 self.decoder_config.append((d_model, "attention"))
-            else:
+            elif name == "residual":
                 in_ch, out_ch = meta
                 self.decoder_config.append(((out_ch + end_dim, in_ch), "residual"))
-
-                if name == "downsample":
-                    self.decoder_config.append(((in_ch, in_ch), "upsample"))
-
                 end_dim = in_ch
+            elif name == "upchannel":
+                in_ch, out_ch = meta
+                self.decoder_config.append(((out_ch, in_ch), "downchannel"))
+                end_dim = in_ch
+            elif name == "downsample":
+                in_ch, out_ch = meta
+                self.decoder_config.append(((in_ch, in_ch), "upsample"))
 
         # build our model
         self.in_proj = nn.Conv2d(in_channels, start_dim, kernel_size=3, padding="same")
@@ -111,16 +130,27 @@ class UNET(nn.Module):
         for meta, name in self.encoder_config:
             if name == "attention":
                 d_model = meta
-                self.encoder.append(Transformer(d_model=d_model))
+                self.encoder.append(
+                    Transformer(
+                        d_model=d_model,
+                        nhead=4,
+                        dim_feedforward=int(4 * d_model),
+                        activation="gelu",
+                        batch_first=True,
+                        norm_first=True,
+                    )
+                )
             elif name == "downsample":
                 in_ch, out_ch = meta
                 self.encoder.append(
                     nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1)
                 )
-            elif name == "residual":
+            else:  # residual or upchannel
                 in_ch, out_ch = meta
                 self.encoder.append(
-                    ResidualBlock(in_ch, out_ch, groupnorm_n_groups, time_embed_dim)
+                    ResidualBlock(
+                        in_ch, out_ch, groupnorm_n_groups, time_embed_dim, name=name
+                    )
                 )
 
         self.bottleneck = nn.ModuleList()
@@ -134,14 +164,25 @@ class UNET(nn.Module):
         for meta, name in self.decoder_config:
             if name == "attention":
                 d_model = meta
-                self.decoder.append(Transformer(d_model=d_model))
+                self.decoder.append(
+                    Transformer(
+                        d_model=d_model,
+                        nhead=4,
+                        dim_feedforward=int(4 * d_model),
+                        activation="gelu",
+                        batch_first=True,
+                        norm_first=True,
+                    )
+                )
             elif name == "upsample":
                 in_ch, out_ch = meta
                 self.decoder.append(UpSampleBlock(in_ch, out_ch))
-            elif name == "residual":
+            else:  # residual or downchannel
                 in_ch, out_ch = meta
                 self.decoder.append(
-                    ResidualBlock(in_ch, out_ch, groupnorm_n_groups, time_embed_dim)
+                    ResidualBlock(
+                        in_ch, out_ch, groupnorm_n_groups, time_embed_dim, name=name
+                    )
                 )
 
         self.out_proj = nn.Conv2d(
@@ -158,10 +199,10 @@ class UNET(nn.Module):
         for module in self.encoder:
             if isinstance(module, ResidualBlock):
                 x = module(x, time_embed)
-                residual_list.append(x)
+                if module.name == "residual":
+                    residual_list.append(x)
             elif isinstance(module, nn.Conv2d):  # downsample
                 x = module(x)
-                residual_list.append(x)
             else:  # attention
                 x = module(x)
 
@@ -172,10 +213,13 @@ class UNET(nn.Module):
         # pass through decoder
         for module in self.decoder:
             if isinstance(module, ResidualBlock):
-                residual = residual_list.pop()
-                x = torch.cat([residual, x], dim=1)
+                if module.name == "residual":
+                    residual = residual_list.pop()
+                    x = torch.cat([residual, x], dim=1)
                 x = module(x, time_embed)
-            else:
+            elif isinstance(module, UpSampleBlock):
+                x = module(x)
+            else:  # attention
                 x = module(x)
 
         return self.out_proj(x)
@@ -191,7 +235,7 @@ if __name__ == "__main__":
     output = usb(output)
     print(output.shape)
 
-    rand_image = torch.randn(4, 3, 128, 128)
+    rand_image = torch.randn(4, 3, 64, 64)
     rand_time_embeddings = torch.randn(4, 128)
     unet = UNET()
     output = unet(rand_image, rand_time_embeddings)
